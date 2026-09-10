@@ -34,15 +34,19 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+from collections.abc import Callable
+from typing import TypeVar, cast
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
+    REGISTRY,
     CollectorRegistry,
     Counter,
     Histogram,
     generate_latest,
     multiprocess,
 )
+from prometheus_client.metrics import MetricWrapperBase
 
 from app.core.logging import get_logger
 
@@ -67,36 +71,76 @@ _LATENCY_BUCKETS = (
     0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, float("inf"),
 )
 
+T = TypeVar("T", bound=MetricWrapperBase)
+
+
+def _register(factory: Callable[[], T], name: str) -> T:
+    """Create a collector, or return the existing one if already registered.
+
+    Metrics are declared at module scope, so importing this module twice in one
+    process tries to register the same series twice and prometheus_client raises
+    DuplicateTimeseries. That is not hypothetical: `uvicorn --reload` re-imports
+    modules on every code change, and test suites that reset sys.modules do the
+    same. Crashing the process because instrumentation was loaded twice is a
+    strictly worse outcome than reusing the collector that is already there.
+    """
+    try:
+        return factory()
+    except Exception:
+        existing = REGISTRY._names_to_collectors.get(name)
+        if existing is None:
+            # Counters are exposed as <name>_total, so the bare name may miss.
+            existing = REGISTRY._names_to_collectors.get(f"{name}_total")
+        if existing is None:
+            raise
+        return cast(T, existing)
+
+
 # --- The two metrics requested, plus the minimum needed to interpret them ----
 
-QUERY_LATENCY = Histogram(
+QUERY_LATENCY = _register(
+    lambda: Histogram(
+        "rag_query_latency_seconds",
+        "Query latency by pipeline stage.",
+        labelnames=("stage",),
+        buckets=_LATENCY_BUCKETS,
+    ),
     "rag_query_latency_seconds",
-    "Query latency by pipeline stage.",
-    labelnames=("stage",),
-    buckets=_LATENCY_BUCKETS,
 )
 
-RETRIEVAL_HITS = Counter(
+RETRIEVAL_HITS = _register(
+    lambda: Counter(
+        "rag_retrieval_hit_count",
+        "Chunks returned, by retriever. Scraped as rag_retrieval_hit_count_total.",
+        labelnames=("retriever",),
+    ),
     "rag_retrieval_hit_count",
-    "Chunks returned, by retriever. Scraped as rag_retrieval_hit_count_total.",
-    labelnames=("retriever",),
 )
 
-QUERIES = Counter(
+QUERIES = _register(
+    lambda: Counter(
+        "rag_queries",
+        "Queries answered, by outcome.",
+        labelnames=("outcome",),  # grounded | refused | error
+    ),
     "rag_queries",
-    "Queries answered, by outcome.",
-    labelnames=("outcome",),  # grounded | refused | error
 )
 
-CACHE_EVENTS = Counter(
+CACHE_EVENTS = _register(
+    lambda: Counter(
+        "rag_cache_events",
+        "Query cache lookups.",
+        labelnames=("result",),  # hit | miss
+    ),
     "rag_cache_events",
-    "Query cache lookups.",
-    labelnames=("result",),  # hit | miss
 )
 
-RERANKER_DEGRADED = Counter(
+RERANKER_DEGRADED = _register(
+    lambda: Counter(
+        "rag_reranker_degraded",
+        "Times the reranker failed and the pipeline fell back to fusion order.",
+    ),
     "rag_reranker_degraded",
-    "Times the reranker failed and the pipeline fell back to fusion order.",
 )
 
 

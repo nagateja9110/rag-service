@@ -1,5 +1,6 @@
 # Lint + type-check only. Never installed in the runtime image.
 #   pip install -r requirements-dev.txt
+pytest>=8.3,<10
 ruff>=0.8,<0.15
 mypy>=1.13,<2
 types-PyYAML>=6,<7

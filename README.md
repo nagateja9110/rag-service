@@ -96,6 +96,31 @@ CONFIG_FILE=config.local.yaml .venv/bin/uvicorn app.main:app --port 8080
 
 ---
 
+## Frontend
+
+A React (Vite) single-page app lives in `frontend/`. It is a thin client over
+the API: ask a question, read the answer, inspect the citations.
+
+```bash
+cd frontend && npm install && npm run dev   # http://localhost:5173
+```
+
+It expects the API at `http://localhost:8080` (override with `VITE_API_URL`).
+Vite's default port 5173 is already in the backend's CORS allowlist — change one
+and you must change the other, or the browser blocks every request.
+
+What it surfaces that a plain chat box would not:
+
+- **Citations per answer** — file name, page, and a relative confidence bar,
+  with the underlying chunk text expandable.
+- **Refusals as a first-class state.** "Not found in your documents" gets its
+  own treatment rather than looking like a failed request, because it is a
+  correct outcome.
+- **Pipeline internals** — how many chunks each retriever found, how many *both*
+  found (the agreement signal RRF rewards), and per-stage timings.
+- **Backend health**, polled independently, so the UI can say the API is down
+  before you type a question rather than after.
+
 ## Configuration
 
 Precedence, highest first:
@@ -193,9 +218,16 @@ a fast non-reasoning `--judge-model` on a throttled provider.
 
 ```bash
 pip install -r requirements.txt -r requirements-local.txt -r requirements-dev.txt
-ruff check app scripts
+pytest          # 67 tests, no network, no API key
+ruff check app scripts tests
 mypy
 ```
+
+The suite stubs the embedding model and the LLM, so it runs offline and
+deterministically. Notable cases: RRF ranking behaviour, ingestion idempotency,
+the embedding-space guard, the refusal path (asserting no LLM call is made),
+metric label cardinality, and an assertion that the serving path never imports
+`app.ingestion`.
 
 > Install requirement files **together in one pip invocation**. pip does not
 > backtrack already-installed packages, so adding them one at a time can

@@ -9,6 +9,8 @@ __pycache__/
 
 # Local vector store and corpus
 chroma_db/
+# vector store created by the test suite
+.pytest_chroma/
 data/*
 !data/.gitkeep
 
