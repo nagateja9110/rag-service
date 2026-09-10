@@ -1,0 +1,161 @@
+# Four services: three long-lived, one job.
+#
+#   docker compose up -d --build                     # chroma + redis + api
+#   docker compose --profile ingest run --rm ingest   # one-shot re-ingestion
+#   docker compose logs -f api
+#
+# The api container ingests ./data on boot via scripts/start.sh, so the `ingest`
+# profile is only for re-running it without a restart.
+
+name: rag
+
+services:
+  # ---------------------------------------------------------------------
+  # Vector store
+  # ---------------------------------------------------------------------
+  # Runs as a SERVER, not as the embedded ./chroma_db client. Embedded Chroma is
+  # a SQLite file plus an in-process HNSW cache: point two containers at the
+  # same file and you get writer-lock contention and, worse, a reader serving
+  # from a cached graph that no longer matches disk. A server process gives you
+  # exactly one owner of the data.
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: rag-chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/chroma
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma-data:/chroma/chroma
+    ports:
+      # Exposed for local inspection only; the api reaches it over the network.
+      - "8000:8000"
+    healthcheck:
+      # v2 heartbeat. On Chroma < 0.6 use /api/v1/heartbeat instead.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat', timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Query cache
+  # ---------------------------------------------------------------------
+  # Replaces the in-process TTL cache: one cache shared by every uvicorn worker
+  # and every replica, instead of N independent caches each with 1/N the hit
+  # rate.
+  redis:
+    image: redis:7.4-alpine
+    container_name: rag-redis
+    # allkeys-lru + a hard memory cap: this holds cached ANSWERS, which are
+    # regenerable by definition. Redis must evict quietly under pressure rather
+    # than start refusing writes (the default noeviction policy would turn a
+    # full cache into failing SETs). No AOF/RDB either -- persisting a
+    # regenerable cache buys nothing and costs disk I/O on every write.
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # API
+  # ---------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      target: runtime
+      args:
+        # Defaults to true so `docker compose up` yields a working, full-quality
+        # system with OPENAI_API_KEY as the only secret required. Costs ~2.5GB of
+        # image (torch) with the weights baked in, so there is no cold-start
+        # download.
+        #
+        # For a slim image instead:
+        #   INSTALL_LOCAL_MODELS=false RERANKER=cohere docker compose up --build
+        # (and set COHERE_API_KEY in .env)
+        INSTALL_LOCAL_MODELS: "${INSTALL_LOCAL_MODELS:-true}"
+    container_name: rag-api
+    env_file:
+      - .env
+    environment:
+      # Compose overrides: inside this network we always talk to the service
+      # containers, whatever config.yaml says for a bare-metal run.
+      CHROMA_MODE: http
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      CACHE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      # Aggregates /metrics across workers. Required once UVICORN_WORKERS > 1.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-2}"
+      DATA_DIR: /app/data
+      # Must stay consistent with INSTALL_LOCAL_MODELS above: selecting
+      # cross-encoder in a slim image degrades to passthrough at runtime -- it
+      # still serves, just worse, which is exactly the kind of silent quality
+      # regression worth being explicit about.
+      RERANKER: "${RERANKER:-cross-encoder}"
+      CONFIG_FILE: "${CONFIG_FILE:-config.yaml}"
+    volumes:
+      # Read-only: the API has no business modifying your source corpus.
+      - ./data:/app/data:ro
+      # Mount the config so a profile change is a restart, not a rebuild.
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      chroma:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # start.sh ingests before serving, so first boot on a large corpus can take
+    # a while. Give the healthcheck room before the container is declared sick.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Offline ingestion (job, not a service)
+  # ---------------------------------------------------------------------
+  # `profiles` keeps it out of `docker compose up`: it does work and exits.
+  # Idempotent, so re-running it on an unchanged corpus costs nothing.
+  ingest:
+    build:
+      context: .
+      target: runtime
+      args:
+        INSTALL_LOCAL_MODELS: "${INSTALL_LOCAL_MODELS:-true}"
+    container_name: rag-ingest
+    profiles: ["ingest"]
+    env_file:
+      - .env
+    environment:
+      CHROMA_MODE: http
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      DATA_DIR: /app/data
+      CONFIG_FILE: "${CONFIG_FILE:-config.yaml}"
+    volumes:
+      - ./data:/app/data:ro
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      chroma:
+        condition: service_healthy
+    # Bypasses start.sh -- this container ingests and exits; it never serves.
+    entrypoint: ["/usr/bin/tini", "--", "python", "-m", "app.ingestion.cli"]
+    command: ["ingest"]
+
+volumes:
+  chroma-data:

@@ -1,0 +1,15 @@
+# OPTIONAL: local (self-hosted) models -- no API calls, no per-token cost.
+#
+# Covers BOTH local options, because they share the same heavy dependency:
+#   * EMBEDDING_PROVIDER=sentence-transformers
+#   * RERANKER=cross-encoder
+#
+# This pulls torch. On linux/amd64 that is ~2.5GB of image, which is why it is
+# not in requirements.txt -- a deployment using OpenAI embeddings and Cohere
+# reranking should not carry it.
+#
+#   pip install -r requirements.txt -r requirements-local.txt
+#
+# In Docker: --build-arg INSTALL_LOCAL_MODELS=true
+sentence-transformers>=3.3,<6
+llama-index-embeddings-huggingface>=0.4,<0.7

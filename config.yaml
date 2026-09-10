@@ -1,0 +1,121 @@
+# Production configuration.
+#
+# PRECEDENCE (highest first):
+#   constructor args  >  environment  >  .env  >  THIS FILE  >  code defaults
+#
+# So: this file describes how the system is WIRED and belongs in git. Secrets and
+# per-deployment overrides come from the environment and must never be committed.
+# A staging box overrides one env var; it does not fork this file.
+#
+# Every key here maps 1:1 to a field on Settings (app/core/config.py). Its
+# SCREAMING_SNAKE equivalent is the env var: `chunk_size` <-> CHUNK_SIZE.
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+app_env: prod            # local | dev | staging | prod
+log_level: INFO
+log_format: json         # json in production so logs are machine-parseable
+
+# ---------------------------------------------------------------------------
+# Embeddings -- THE provider switch
+# ---------------------------------------------------------------------------
+# openai                -> text-embedding-3-small, 1536-d, hosted, costs per token
+# sentence-transformers -> all-MiniLM-L6-v2, 384-d, local, free, offline-capable
+#
+# WARNING: these produce vectors of DIFFERENT dimensionality in DIFFERENT spaces.
+# A collection built with one is unusable by the other, so switching requires a
+# re-ingest. The app stamps the collection with `provider:model` and REFUSES TO
+# START on a mismatch rather than serving nonsense -- to switch:
+#
+#   1. change embedding_provider here
+#   2. python -m app.ingestion.cli ingest --rebuild
+#
+# (Or point chroma_collection at a different name to keep both around.)
+# Groq has NO embeddings endpoint, so a Groq deployment MUST embed locally.
+# Settings enforces this rather than letting ingestion 404 halfway through.
+embedding_provider: sentence-transformers
+embedding_model: text-embedding-3-small          # used when provider is openai
+local_embedding_model: sentence-transformers/all-MiniLM-L6-v2
+embedding_dimension: 1536                        # OpenAI-only (Matryoshka truncation)
+# all-MiniLM-L6-v2 emits 384-d vectors; switching provider needs a re-ingest.
+
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
+# openai -> gpt-4o-mini et al., needs OPENAI_API_KEY
+# groq   -> open models on LPU hardware; much faster and cheaper, generation
+#           only (no embeddings). Needs GROQ_API_KEY.
+llm_provider: groq
+groq_model: openai/gpt-oss-120b
+llm_model: gpt-4o-mini   # used when llm_provider is openai
+llm_temperature: 0.1     # low, not zero: grounded answers, minimal drift
+# gpt-oss-* are REASONING models: they emit hidden reasoning tokens before the
+# answer. Cap this too low and the response comes back EMPTY, not truncated.
+llm_max_tokens: 1024
+openai_max_retries: 3
+openai_timeout_seconds: 60
+
+# ---------------------------------------------------------------------------
+# Chunking (ingestion)
+# ---------------------------------------------------------------------------
+# Changing either requires a re-ingest to take effect on existing documents.
+chunk_size: 1024
+chunk_overlap: 200
+
+# ---------------------------------------------------------------------------
+# Vector store
+# ---------------------------------------------------------------------------
+chroma_mode: http        # http in containers; "persistent" for a local ./chroma_db
+chroma_host: chroma
+chroma_port: 8000
+chroma_collection: documents
+
+# ---------------------------------------------------------------------------
+# Retrieval
+# ---------------------------------------------------------------------------
+vector_top_k: 10         # dense candidates
+bm25_top_k: 10           # sparse candidates
+rrf_k: 60                # RRF smoothing constant (Cormack et al. 2009)
+fusion_top_n: 20         # survivors of fusion, fed to the reranker
+rerank_top_n: 5          # chunks handed to the LLM
+# min_rerank_score: 0.2  # optional floor; scale differs per backend
+bm25_refresh_seconds: 60
+bm25_max_nodes: 50000
+
+# ---------------------------------------------------------------------------
+# Re-ranking -- THE quality/cost switch
+# ---------------------------------------------------------------------------
+# cross-encoder -> in-process, best quality, no per-call cost, needs
+#                  requirements-local.txt (torch: ~2.5GB image). Requires
+#                  building with INSTALL_LOCAL_MODELS=true, which is the
+#                  docker-compose default -- so this profile works out of the
+#                  box with OPENAI_API_KEY as the only secret.
+# cohere        -> hosted API, slim image (no torch), needs COHERE_API_KEY and
+#                  costs per call. Use when image size matters more than the
+#                  extra dependency.
+# none          -> passthrough; keeps RRF order. Measurably worse -- dev only.
+reranker: cross-encoder
+local_reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+cohere_rerank_model: rerank-english-v3.0
+
+# ---------------------------------------------------------------------------
+# Query cache
+# ---------------------------------------------------------------------------
+# redis  -> shared across every worker and replica (production)
+# memory -> process-local; hit rate divides by worker count (dev only)
+cache_backend: redis
+query_cache_enabled: true
+query_cache_ttl_seconds: 300
+query_cache_max_size: 512      # memory backend only
+redis_url: redis://redis:6379/0
+redis_prefix: "rag:q:"
+redis_timeout_seconds: 2
+
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+api_host: 0.0.0.0
+api_port: 8080
+cors_allow_origins: "https://app.example.com"
+cors_allow_credentials: false

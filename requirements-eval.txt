@@ -1,0 +1,31 @@
+# OFFLINE evaluation tooling. NOT in the serving image -- ragas pulls the whole
+# langchain + datasets stack (~500MB) and none of it runs in production.
+#
+# CRITICAL: install this TOGETHER with requirements.txt in ONE pip invocation:
+#
+#   pip install -r requirements.txt -r requirements-eval.txt
+#
+# Running `pip install ragas` against an already-populated environment breaks
+# it. pip does not backtrack packages that are already installed, so it upgrades
+# `openai` to 2.x to satisfy langchain-openai, violating llama-index-llms-openai's
+# `openai<2` pin -- leaving an app that still imports but runs an unsupported
+# client. Resolved together, pip finds a consistent set.
+#
+# WHY THESE PINS, specifically:
+#   * ragas 0.4.x imports `langchain_community.chat_models.vertexai`, which
+#     langchain-community 0.4 removed. It installs cleanly (`pip check` passes)
+#     and then fails at import -- a dependency break that version metadata alone
+#     will not catch.
+#   * The langchain 0.3 generation is internally consistent AND stays on
+#     `openai<2`, which is what llama-index requires. That makes 0.3 the only
+#     line where the eval stack and the app stack actually coexist.
+#   * ragas 0.2.14+ has the SingleTurnSample / EvaluationDataset API that
+#     scripts/evaluate.py is written against (introduced in 0.2, still present
+#     in 0.3/0.4 -- so a future upgrade is an unpin, not a rewrite).
+#
+# Re-verify with `pip check` AND an actual `import ragas` before trusting a bump.
+ragas>=0.2.14,<0.3
+langchain-core<1
+langchain-community<0.4
+langchain-openai<0.4
+openai>=1.81,<2

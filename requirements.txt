@@ -1,0 +1,43 @@
+# Ranges are pinned at minor boundaries: tight enough to keep a surprise
+# breaking release out of your build, loose enough to take patches.
+# For deploys, freeze this into a real lockfile:
+#   pip install -r requirements.txt && pip freeze > requirements.lock
+
+# --- API -------------------------------------------------------------------
+fastapi>=0.115,<0.117
+uvicorn[standard]>=0.32,<0.36
+pydantic>=2.9,<3
+pydantic-settings>=2.6,<3
+
+# --- Orchestration / models ------------------------------------------------
+llama-index-core>=0.12,<0.15
+llama-index-llms-openai>=0.3,<0.6
+llama-index-embeddings-openai>=0.3,<0.6
+llama-index-vector-stores-chroma>=0.4,<0.7
+llama-index-readers-file>=0.4,<0.7
+
+# --- Vector store ----------------------------------------------------------
+chromadb>=0.5.20,<0.7
+
+# --- Document parsing ------------------------------------------------------
+pypdf>=5.1,<7
+
+# --- CLI -------------------------------------------------------------------
+click>=8.1,<9
+
+# --- Hybrid retrieval (BM25 sparse index) ----------------------------------
+llama-index-retrievers-bm25>=0.5,<0.9
+
+# --- Re-ranking fallback ---------------------------------------------------
+# Cohere lives in the BASE image on purpose: it is the deployment path that
+# avoids torch. The local cross-encoder is the optional extra, not this.
+cohere>=5.11,<6
+
+# --- Observability ---------------------------------------------------------
+prometheus-client>=0.21,<1
+
+# --- Distributed cache -----------------------------------------------------
+redis[hiredis]>=5.0,<7
+
+# --- Config file -----------------------------------------------------------
+PyYAML>=6,<7

@@ -1,0 +1,72 @@
+# Tooling config only -- the app is installed via requirements.txt, not as a
+# package. Keeping lint/type config here (rather than setup.cfg + mypy.ini +
+# .ruff.toml) means one file to read and one file to change.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["."]
+exclude = [".venv", "__pycache__", "chroma_db", "logs"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # import sorting
+    "B",    # bugbear: mutable defaults, shadowed builtins, except-in-loop
+    "UP",   # pyupgrade: modern syntax for the target version
+    "C4",   # comprehension simplifications
+    "SIM",  # obvious simplifications
+    "RUF",  # ruff's own rules
+    "BLE",  # blind except
+]
+ignore = [
+    "E501",  # line length is handled by the formatter, not the linter
+]
+# BLE001 is deliberately NOT globally ignored. This service degrades rather than
+# propagates in several places (retrieval, re-ranking, cache, metrics), and each
+# of those is a considered decision -- so each one carries an explicit
+# `# noqa: BLE001` with a reason. Blanket-ignoring the rule would hide the next
+# broad except somebody adds by accident.
+
+[tool.ruff.lint.per-file-ignores]
+# The evaluation script imports app modules after sys.path manipulation.
+"scripts/evaluate.py" = ["E402"]
+
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)` / `Query(...)` in a default IS the FastAPI idiom -- the call is
+# evaluated once at import and the object is immutable, so B008's "mutable
+# default argument" concern does not apply. Configuring the exemption is
+# honest; blanket-ignoring B008 would also hide real mutable defaults.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "scripts"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["app", "scripts"]
+# Strict enough to catch real mistakes without drowning in third-party stubs.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+# LlamaIndex, ChromaDB, ragas and sentence-transformers ship partial or no type
+# information. Silencing their internals is the difference between a type check
+# you read and one you learn to ignore.
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["chromadb.*", "llama_index.*", "ragas.*", "sentence_transformers.*", "cohere.*", "langchain_openai.*"]
+ignore_missing_imports = true
+follow_imports = "skip"

@@ -1,0 +1,20 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local vector store and corpus
+chroma_db/
+data/*
+!data/.gitkeep
+
+*.log
+.DS_Store
+
+# Evaluation output (keep the directory, ignore the results history)
+logs/*
+!logs/.gitkeep
